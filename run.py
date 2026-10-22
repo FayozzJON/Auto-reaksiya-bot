@@ -53,7 +53,7 @@ bot = Client("reaction_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOK
 
 active_userbots = {}
 user_states = {}
-channel_reactions_cache = {}  # Telegramga tinimsiz so'rov ketishining oldini olish uchun kesh
+channel_reactions_cache = {}
 
 DEFAULT_FALLBACK = [
     {"type": "standard", "val": "🔥"},
@@ -98,24 +98,35 @@ async def send_log(text: str, original_msg=None):
     except Exception:
         pass
 
+async def safe_resolve_peer(client: Client, chat_id: int):
+    try:
+        return await client.resolve_peer(chat_id)
+    except Exception:
+        try:
+            await client.get_chat(chat_id)
+            return await client.resolve_peer(chat_id)
+        except Exception:
+            return None
+
 async def fetch_channel_reactions(u_client: Client, chat_id: int):
     if chat_id in channel_reactions_cache:
         return channel_reactions_cache[chat_id]
 
     available = []
     try:
-        peer = await u_client.resolve_peer(chat_id)
-        full = await u_client.invoke(GetFullChannel(channel=peer))
-        ar = full.full_chat.available_reactions
-        if ar:
-            if isinstance(ar, ChatReactionsSome):
-                for r in ar.reactions:
-                    if isinstance(r, ReactionEmoji):
-                        available.append({"type": "standard", "val": r.emoticon})
-                    elif isinstance(r, ReactionCustomEmoji):
-                        available.append({"type": "custom", "id": int(r.document_id)})
-            elif isinstance(ar, ChatReactionsAll):
-                available.extend(DEFAULT_FALLBACK)
+        peer = await safe_resolve_peer(u_client, chat_id)
+        if peer:
+            full = await u_client.invoke(GetFullChannel(channel=peer))
+            ar = full.full_chat.available_reactions
+            if ar:
+                if isinstance(ar, ChatReactionsSome):
+                    for r in ar.reactions:
+                        if isinstance(r, ReactionEmoji):
+                            available.append({"type": "standard", "val": r.emoticon})
+                        elif isinstance(r, ReactionCustomEmoji):
+                            available.append({"type": "custom", "id": int(r.document_id)})
+                elif isinstance(ar, ChatReactionsAll):
+                    available.extend(DEFAULT_FALLBACK)
     except Exception:
         pass
 
@@ -124,10 +135,17 @@ async def fetch_channel_reactions(u_client: Client, chat_id: int):
     return res
 
 async def execute_reaction(client: Client, message, acc_name: str, owner_uid: int):
-    chat_id = str(message.chat.id)
-    u_channels = db.get("users", {}).get(str(owner_uid), {}).get("channels", {})
+    try:
+        if not message.chat:
+            return
 
-    if chat_id in u_channels:
+        chat_id = str(message.chat.id)
+        u_channels = db.get("users", {}).get(str(owner_uid), {}).get("channels", {})
+
+        # Agar bu kanal ushbu foydalanuvchining bazasida bo'lmasa, umuman tegmaydi
+        if chat_id not in u_channels:
+            return
+
         ch_data = u_channels[chat_id]
         mode = ch_data.get("mode", "fixed")
         emojis = ch_data.get("emojis", [])
@@ -141,31 +159,34 @@ async def execute_reaction(client: Client, message, acc_name: str, owner_uid: in
         if not emojis:
             emojis = DEFAULT_FALLBACK[:limit]
 
-        try:
-            peer = await client.resolve_peer(message.chat.id)
-            r_list = [
-                ReactionCustomEmoji(document_id=int(i["id"])) if i.get("type") == "custom"
-                else ReactionEmoji(emoticon=i["val"])
-                for i in emojis
-            ]
-            await client.invoke(SendReaction(peer=peer, msg_id=message.id, reaction=r_list))
+        peer = await safe_resolve_peer(client, message.chat.id)
+        if not peer:
+            return
 
-            log_text = (
-                f"🎯 <b>Postga reaksiya bosildi!</b>\n\n"
-                f"📢 Kanal: <b>{message.chat.title or chat_id}</b>\n"
-                f"👤 Egasi: <code>{owner_uid}</code>\n"
-                f"🏷 Userbot: <b>{acc_name}</b>\n"
-                f"✨ Reaksiyalar soni: <b>{len(r_list)} ta</b>"
-            )
-            await send_log(log_text, original_msg=message)
-        except FloodWait as e:
-            print(f"[{acc_name}] FloodWait: {e.value} soniya kutilmoqda")
-        except Exception as e:
-            print(f"[{acc_name}] Reaksiya xatosi: {e}")
+        r_list = [
+            ReactionCustomEmoji(document_id=int(i["id"])) if i.get("type") == "custom"
+            else ReactionEmoji(emoticon=i["val"])
+            for i in emojis
+        ]
+
+        await client.invoke(SendReaction(peer=peer, msg_id=message.id, reaction=r_list))
+
+        log_text = (
+            f"🎯 <b>Postga reaksiya bosildi!</b>\n\n"
+            f"📢 Kanal: <b>{message.chat.title or chat_id}</b>\n"
+            f"👤 Egasi: <code>{owner_uid}</code>\n"
+            f"🏷 Userbot: <b>{acc_name}</b>\n"
+            f"✨ Reaksiyalar soni: <b>{len(r_list)} ta</b>"
+        )
+        await send_log(log_text, original_msg=message)
+
+    except FloodWait as e:
+        print(f"[{acc_name}] FloodWait: {e.value} soniya kutilmoqda")
+    except Exception as e:
+        print(f"[{acc_name}] Reaksiya xatosi: {e}")
 
 def make_auto_react(acc_name: str, owner_uid: int):
     async def handler(client: Client, message):
-        # Bot qotib qolmasligi uchun reaksiya bosishni alohida task (fon) sifatida chiqaramiz
         asyncio.create_task(execute_reaction(client, message, acc_name, owner_uid))
     return handler
 
@@ -186,7 +207,7 @@ async def launch_account(acc_name: str, owner_uid: int):
     if acc_name not in db["users"][str(owner_uid)]["accounts"]:
         db["users"][str(owner_uid)]["accounts"].append(acc_name)
         save_db(db)
-    print(f"⚡ [{acc_name}] foydalanuvchi [{owner_uid}] uchun muvaffaqiyatli yuklandi.")
+    print(f"⚡ [{acc_name}] foydalanuvchi [{owner_uid}] uchun yuklandi.")
 
 # /start buyrug'i
 @bot.on_message(filters.private & filters.command("start"))
