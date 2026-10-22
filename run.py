@@ -54,9 +54,9 @@ API_ID = int(os.environ.get("API_ID", 34100810))
 API_HASH = os.environ.get("API_HASH", "e5059d234c0d8500c048595354e179b8")
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8834859784:AAHrYQH8ju3VVJjcQ0w3XNteab9oa9iASa0")
 
-# ADMIN ID va LOG GURUHI/KANALI ID raqami
+# Aniq sozlangan Admin va Log Kanal ID lari
 ADMIN_ID = 5998202318
-LOG_CHAT_ID = -1003456789012  # O'zingiz ochgan yopiq guruh yoki kanal ID sini yozing (bot u yerda admin bo'lishi shart)
+LOG_CHAT_ID = -1003974652457
 
 SESSIONS_DIR = "sessions"
 DATA_FILE = "secure_db.json"
@@ -64,7 +64,6 @@ os.makedirs(SESSIONS_DIR, exist_ok=True)
 
 bot = Client("reaction_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-# {acc_name: {"client": Client, "owner_id": int, "user_tg_id": int, "name": str, "is_premium": bool}}
 active_userbots = {}
 user_states = {}
 
@@ -83,7 +82,7 @@ def load_data():
             pass
     return {
         "allowed_users": [ADMIN_ID],
-        "users": {}  # "uid": {"accounts": ["acc1"], "channels": {}}
+        "users": {}
     }
 
 def save_data(data):
@@ -145,7 +144,7 @@ async def send_log_report(chat_id: int, text: str, original_msg=None):
         else:
             await bot.send_message(chat_id=LOG_CHAT_ID, text=text, parse_mode=ParseMode.HTML)
     except Exception as e:
-        print(f"Log guruhiga xabar yuborishda xatolik: {e}")
+        print(f"Log xatoligi: {e}")
 
 async def fetch_channel_reactions(u_client: Client, chat_id: int, msg_id: int = None):
     available = []
@@ -230,7 +229,7 @@ def make_auto_react(acc_name: str, owner_uid: int):
                     f"📢 Kanal: <b>{message.chat.title or chat_id}</b> (<code>{chat_id}</code>)\n"
                     f"👤 Egasi (Foydalanuvchi ID): <code>{owner_uid}</code>\n"
                     f"🏷 Userbot: <b>{acc_name}</b> ({acc_info.get('name')})\n"
-                    f"✨ Bosilgan reaksiyalar soni: <b>{len(reaction_list)} ta</b>"
+                    f"✨ Reaksiyalar: <b>{len(reaction_list)} ta</b>"
                 )
                 await send_log_report(LOG_CHAT_ID, log_text, original_msg=message)
 
@@ -257,14 +256,13 @@ async def launch_account_session(acc_name: str, owner_uid: int):
     if acc_name not in db["users"][str(owner_uid)]["accounts"]:
         db["users"][str(owner_uid)]["accounts"].append(acc_name)
         save_data(db)
-    print(f"⚡ [{acc_name}] foydalanuvchi [{owner_uid}] uchun ishga tushdi ({me.first_name})")
+    print(f"⚡ [{acc_name}] yuklandi ({me.first_name})")
 
 @bot.on_message(filters.private & filters.command("start"))
 async def start_handler(client, message):
     uid = message.from_user.id
     user_states.pop(uid, None)
 
-    # Foydalanuvchi ruxsatini tekshirish
     if uid not in db["allowed_users"]:
         req_markup = InlineKeyboardMarkup([
             [
@@ -273,22 +271,21 @@ async def start_handler(client, message):
             ]
         ])
         req_text = (
-            f"🔔 <b>Yangi foydalanuvchi botdan foydalanish uchun ruxsat so'ramoqda!</b>\n\n"
+            f"🔔 <b>Yangi foydalanuvchi ruxsat so'ramoqda!</b>\n\n"
             f"👤 Ism: <b>{message.from_user.first_name}</b>\n"
             f"🔗 Username: @{message.from_user.username or 'yoq'}\n"
             f"🆔 ID: <code>{uid}</code>"
         )
-        await send_log_report(LOG_CHAT_ID, req_text)
         if LOG_CHAT_ID:
             try:
                 await bot.send_message(LOG_CHAT_ID, req_text, reply_markup=req_markup)
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"Log kanalga yuborishda xatolik: {e}")
 
         await message.reply_text(
             "⏳ <b>Xush kelibsiz!</b>\n\n"
-            "Xavfsizlik maqsadida botdan foydalanish uchun <b>Admin ruxsati</b> talab qilinadi.\n"
-            "So'rovingiz adminga yuborildi. Ruxsat berilgach, sizga xabar keladi.",
+            "Botdan foydalanish uchun <b>Admin ruxsati</b> talab qilinadi.\n"
+            "So'rovingiz adminga yuborildi. Ruxsat berilgach xabar keladi.",
             parse_mode=ParseMode.HTML
         )
         return
@@ -297,7 +294,7 @@ async def start_handler(client, message):
     u_data = db["users"][str(uid)]
     text = (
         f"Assalomu alaykum, <b>{message.from_user.first_name}</b>!\n\n"
-        f"⚡ <b>Auto Reaction Xavfsiz Tizimi</b>ga xush kelibsiz.\n"
+        f"⚡ <b>Auto Reaction Xavfsiz Tizimi</b> faol.\n"
         f"👥 Sizning ulangan akkauntlaringiz: <b>{len(u_data.get('accounts', []))} ta</b>\n"
         f"📢 Sizning kanallaringiz: <b>{len(u_data.get('channels', {}))} ta</b>\n\n"
         "Kerakli bo'limni tanlang:"
@@ -309,7 +306,6 @@ async def callback_handler(client, query: CallbackQuery):
     uid = query.from_user.id
     data = query.data
 
-    # Admin rozilik tugmalari
     if data.startswith("allow_"):
         if uid != ADMIN_ID:
             await query.answer("Faqat admin ruxsat bera oladi!", show_alert=True)
@@ -318,8 +314,8 @@ async def callback_handler(client, query: CallbackQuery):
         if target_uid not in db["allowed_users"]:
             db["allowed_users"].append(target_uid)
             save_data(db)
-        await query.answer("Foydalanuvchiga ruxsat berildi!", show_alert=True)
-        await query.message.edit_text(f"✅ ID: <code>{target_uid}</code> foydalanuvchiga ruxsat berildi!")
+        await query.answer("Ruxsat berildi!", show_alert=True)
+        await query.message.edit_text(f"✅ ID: <code>{target_uid}</code> ga ruxsat berildi!")
         try:
             await bot.send_message(
                 target_uid,
@@ -338,13 +334,13 @@ async def callback_handler(client, query: CallbackQuery):
         await query.answer("Rad etildi!", show_alert=True)
         await query.message.edit_text(f"❌ ID: <code>{target_uid}</code> rad etildi.")
         try:
-            await bot.send_message(target_uid, "❌ Afsuski, admin so'rovingizni rad etdi.")
+            await bot.send_message(target_uid, "❌ Admin sizning so'rovingizni rad etdi.")
         except Exception:
             pass
         return
 
     if uid not in db["allowed_users"]:
-        await query.answer("Sizga botdan foydalanishga ruxsat berilmagan!", show_alert=True)
+        await query.answer("Ruxsat berilmagan!", show_alert=True)
         return
 
     init_user_data(uid)
@@ -369,7 +365,7 @@ async def callback_handler(client, query: CallbackQuery):
             one_time_keyboard=True
         )
         await query.message.reply_text(
-            "📱 <b>O'z akkauntingizni ulash:</b>\n\n"
+            "📱 <b>Akkauntingizni ulash uchun:</b>\n\n"
             "Pastdagi <b>'📞 Kontaktni ulashish'</b> tugmasini bosing yoki telefon raqamingizni yuboring:\n"
             "Masalan: <code>+998901234567</code>",
             reply_markup=contact_keyboard,
@@ -381,17 +377,17 @@ async def callback_handler(client, query: CallbackQuery):
         user_accs = u_data.get("accounts", [])
         if not user_accs:
             await query.message.edit_text(
-                "📋 <b>Siz hali birorta ham shaxsiy akkaunt ulamagansiz.</b>",
+                "📋 <b>Siz hali akkaunt ulamagansiz.</b>",
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Orqaga", callback_data="cancel_setup")]])
             )
             return
 
-        text = "👥 <b>Sizning ulangan Userbot akkauntlaringiz:</b>\n\n"
+        text = "👥 <b>Sizning shaxsiy akkauntlaringiz:</b>\n\n"
         keyboard = []
         for name in user_accs:
             info = active_userbots.get(name, {})
             status = "👑 Premium" if info.get("is_premium") else "👤 Oddiy"
-            text += f"• <b>{name}</b> ({info.get('name', 'Nomaʼlum')}) — {status}\n"
+            text += f"• <b>{name}</b> ({info.get('name', 'User')}) — {status}\n"
             keyboard.append([InlineKeyboardButton(f"🚪 {name} ni uzish", callback_data=f"remove_acc_{name}")])
 
         keyboard.append([InlineKeyboardButton("⬅️ Orqaga", callback_data="cancel_setup")])
@@ -439,7 +435,7 @@ async def callback_handler(client, query: CallbackQuery):
         channels = u_data.get("channels", {})
         if not channels:
             await query.message.edit_text(
-                "📋 <b>Siz hali birorta ham kanal biriktirmagansiz.</b>",
+                "📋 <b>Sizda biriktirilgan kanallar yo'q.</b>",
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Orqaga", callback_data="cancel_setup")]])
             )
             return
@@ -835,7 +831,6 @@ async def main():
     await bot.start()
     print("🤖 Asosiy boshqaruv boti ishga tushdi.")
 
-    # Bazadagi foydalanuvchilarning shaxsiy sessiyalarini tiklash
     for uid_str, u_info in db.get("users", {}).items():
         owner_uid = int(uid_str)
         for acc_name in list(u_info.get("accounts", [])):
