@@ -55,11 +55,8 @@ active_userbots = {}
 user_states = {}
 channel_reactions_cache = {}
 
-DEFAULT_FALLBACK = [
-    {"type": "standard", "val": "🔥"},
-    {"type": "standard", "val": "❤️"},
-    {"type": "standard", "val": "👍"}
-]
+DEFAULT_PREMIUM = [{"type": "standard", "val": "🔥"}, {"type": "standard", "val": "❤️"}, {"type": "standard", "val": "👍"}]
+DEFAULT_STANDARD = [{"type": "standard", "val": "👍"}]
 
 def get_main_menu(uid: int):
     u_data = db["users"].get(str(uid), {})
@@ -79,9 +76,10 @@ def get_main_menu(uid: int):
 
 def get_channel_action_markup(cid):
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("✨ Custom / Yangi reaksiyalar", callback_data=f"edit_custom_{cid}")],
-        [InlineKeyboardButton("⚡ Kanalning dastlabki 3 ta reaksiyasi", callback_data=f"edit_first3_{cid}")],
-        [InlineKeyboardButton("🔄 Postlarga moslashish (Dinamik)", callback_data=f"edit_dyn_{cid}")],
+        [InlineKeyboardButton("👑 Premium akkauntlar uchun (3 ta Custom)", callback_data=f"set_prem_{cid}")],
+        [InlineKeyboardButton("👤 Oddiy akkauntlar uchun (1 ta Oddiy)", callback_data=f"set_norm_{cid}")],
+        [InlineKeyboardButton("⚡ Kanalning dastlabki reaksiyalarini qo'yish", callback_data=f"edit_first3_{cid}")],
+        [InlineKeyboardButton("🔄 Yangi postlarga moslashish (Dinamik)", callback_data=f"edit_dyn_{cid}")],
         [InlineKeyboardButton("❌ Kanalni o'chirish", callback_data=f"del_{cid}")],
         [InlineKeyboardButton("⬅️ Ortga qaytish", callback_data="list_channels")]
     ])
@@ -126,11 +124,11 @@ async def fetch_channel_reactions(u_client: Client, chat_id: int):
                         elif isinstance(r, ReactionCustomEmoji):
                             available.append({"type": "custom", "id": int(r.document_id)})
                 elif isinstance(ar, ChatReactionsAll):
-                    available.extend(DEFAULT_FALLBACK)
+                    available.extend(DEFAULT_PREMIUM)
     except Exception:
         pass
 
-    res = available if available else DEFAULT_FALLBACK
+    res = available if available else DEFAULT_PREMIUM
     channel_reactions_cache[chat_id] = res
     return res
 
@@ -142,41 +140,56 @@ async def execute_reaction(client: Client, message, acc_name: str, owner_uid: in
         chat_id = str(message.chat.id)
         u_channels = db.get("users", {}).get(str(owner_uid), {}).get("channels", {})
 
-        # Agar bu kanal ushbu foydalanuvchining bazasida bo'lmasa, umuman tegmaydi
         if chat_id not in u_channels:
             return
 
         ch_data = u_channels[chat_id]
         mode = ch_data.get("mode", "fixed")
-        emojis = ch_data.get("emojis", [])
         acc_info = active_userbots.get(acc_name, {})
-        limit = 3 if acc_info.get("is_premium") else 1
+        is_premium = acc_info.get("is_premium", False)
+
+        # Reaksiyalarni tanlash
+        if is_premium:
+            emojis = ch_data.get("premium_emojis", [])
+            limit = 3
+        else:
+            emojis = ch_data.get("normal_emojis", [])
+            limit = 1
 
         if mode == "dynamic" or not emojis:
             options = await fetch_channel_reactions(client, message.chat.id)
-            emojis = options[:limit]
+            if not is_premium:
+                # Oddiy akkaunt uchun faqat standart emoji olamiz
+                std_options = [x for x in options if x.get("type") == "standard"]
+                emojis = std_options[:1] if std_options else DEFAULT_STANDARD
+            else:
+                emojis = options[:limit]
 
         if not emojis:
-            emojis = DEFAULT_FALLBACK[:limit]
+            emojis = DEFAULT_PREMIUM[:limit] if is_premium else DEFAULT_STANDARD
 
         peer = await safe_resolve_peer(client, message.chat.id)
         if not peer:
             return
 
-        r_list = [
-            ReactionCustomEmoji(document_id=int(i["id"])) if i.get("type") == "custom"
-            else ReactionEmoji(emoticon=i["val"])
-            for i in emojis
-        ]
+        r_list = []
+        for i in emojis:
+            if i.get("type") == "custom" and is_premium:
+                r_list.append(ReactionCustomEmoji(document_id=int(i["id"])))
+            elif i.get("type") == "standard":
+                r_list.append(ReactionEmoji(emoticon=i["val"]))
 
-        await client.invoke(SendReaction(peer=peer, msg_id=message.id, reaction=r_list))
+        if not r_list:
+            r_list = [ReactionEmoji(emoticon="👍")]
 
+        await client.invoke(SendReaction(peer=peer, msg_id=message.id, reaction=r_list[:limit]))
+
+        acc_type = "👑 Premium (3 ta)" if is_premium else "👤 Oddiy (1 ta)"
         log_text = (
-            f"🎯 <b>Postga reaksiya bosildi!</b>\n\n"
+            f"🎯 <b>Reaksiya bosildi!</b>\n\n"
             f"📢 Kanal: <b>{message.chat.title or chat_id}</b>\n"
-            f"👤 Egasi: <code>{owner_uid}</code>\n"
-            f"🏷 Userbot: <b>{acc_name}</b>\n"
-            f"✨ Reaksiyalar soni: <b>{len(r_list)} ta</b>"
+            f"🏷 Akkaunt: <b>{acc_name}</b> ({acc_type})\n"
+            f"✨ Reaksiyalar: <b>{len(r_list[:limit])} ta</b>"
         )
         await send_log(log_text, original_msg=message)
 
@@ -209,7 +222,7 @@ async def launch_account(acc_name: str, owner_uid: int):
         save_db(db)
     print(f"⚡ [{acc_name}] foydalanuvchi [{owner_uid}] uchun yuklandi.")
 
-# /start buyrug'i
+# /start
 @bot.on_message(filters.private & filters.command("start"))
 async def start_handler(client, message):
     uid = message.from_user.id
@@ -278,7 +291,7 @@ async def callback_handler(client, query: CallbackQuery):
         await send_log(req_text)
         return
 
-    # Admin boshqaruvi
+    # Admin
     if data == "admin_dashboard":
         if uid != ADMIN_ID:
             return
@@ -328,18 +341,6 @@ async def callback_handler(client, query: CallbackQuery):
         await query.message.edit_text(text, reply_markup=markup, parse_mode=ParseMode.HTML)
         return
 
-    elif data.startswith("adm_msg_"):
-        if uid != ADMIN_ID:
-            return
-        target_uid = int(data.split("_")[2])
-        user_states[uid] = {"state": "waiting_admin_message", "target": target_uid}
-        await query.answer()
-        await query.message.reply_text(
-            f"✍️ <code>{target_uid}</code> ga yubormoqchi bo'lgan xabaringizni yozing:\n"
-            "(Bekor qilish uchun: /cancel)"
-        )
-        return
-
     if uid not in db["allowed_users"]:
         await query.answer("Sizga ruxsat berilmagan!", show_alert=True)
         return
@@ -371,11 +372,12 @@ async def callback_handler(client, query: CallbackQuery):
         if not accs:
             await query.message.edit_text("📋 Sizda ulangan akkauntlar yo'q.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Orqaga", callback_data="cancel_setup")]]))
             return
-        text = "👥 <b>Sizning akkauntlaringiz:</b>\n\n"
+        text = "👥 <b>Sizning ulangan Userbot akkauntlaringiz:</b>\n\n"
         kb = []
         for name in accs:
             info = active_userbots.get(name, {})
-            text += f"• <b>{name}</b> ({info.get('name')})\n"
+            status = "👑 Premium" if info.get("is_premium") else "👤 Oddiy"
+            text += f"• <b>{name}</b> ({info.get('name')}) — {status}\n"
             kb.append([InlineKeyboardButton(f"🚪 {name} ni uzish", callback_data=f"delacc_{name}")])
         kb.append([InlineKeyboardButton("⬅️ Orqaga", callback_data="cancel_setup")])
         await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.HTML)
@@ -423,44 +425,72 @@ async def callback_handler(client, query: CallbackQuery):
         cid = data.split("_")[1]
         info = u_data.get("channels", {}).get(cid, {})
         await query.answer()
-        await query.message.edit_text(f"📢 Kanal: <b>{info.get('title')}</b>\n🆔 ID: <code>{cid}</code>\n\nReaksiyalar sozlamasi:", reply_markup=get_channel_action_markup(cid), parse_mode=ParseMode.HTML)
+        p_cnt = len(info.get("premium_emojis", []))
+        n_cnt = len(info.get("normal_emojis", []))
+        desc = f"👑 Premium: {p_cnt} ta | 👤 Oddiy: {n_cnt} ta"
 
-    elif data.startswith("edit_custom_"):
+        await query.message.edit_text(
+            f"📢 Kanal: <b>{info.get('title')}</b>\n"
+            f"🆔 ID: <code>{cid}</code>\n"
+            f"📊 Holat: <b>{desc}</b>\n\n"
+            "Reaksiyalarni qaysi akkauntlar uchun sozlamoqchisiz?",
+            reply_markup=get_channel_action_markup(cid),
+            parse_mode=ParseMode.HTML
+        )
+
+    # 1. Premium akkauntlar uchun reaksiya kiritish (1-3 ta Custom/oddiy)
+    elif data.startswith("set_prem_"):
         cid = data.split("_")[2]
-        user_states[uid] = {"state": "waiting_emojis", "cid": cid, "emojis": []}
+        user_states[uid] = {"state": "waiting_prem_emojis", "cid": cid, "emojis": []}
         await query.answer()
-        await query.message.edit_text("✨ 1 tadan 3 tagacha istalgan emoji yuboring:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💾 Saqlash", callback_data="save_emojis")]]))
+        await query.message.edit_text(
+            "👑 <b>Premium akkauntlar uchun:</b>\n\n"
+            "Klaviaturangizdan <b>1 tadan 3 tagacha</b> bo'lgan istalgan Custom emoji yoki stikerni yuboring:",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💾 Saqlash", callback_data="save_prem_emojis")]])
+        )
 
-    elif data == "save_emojis":
+    elif data == "save_prem_emojis":
         cid = user_states[uid].get("cid")
         emojis = user_states[uid].get("emojis", [])
         if not emojis:
-            await query.answer("Reaksiya kiritilmadi!", show_alert=True)
+            await query.answer("Reaksiya yuborilmadi!", show_alert=True)
             return
-        u_data["channels"][cid]["emojis"] = emojis
+        u_data["channels"][cid]["premium_emojis"] = emojis
         u_data["channels"][cid]["mode"] = "fixed"
         save_db(db)
         user_states.pop(uid, None)
         await query.answer("Saqlandi!")
-        await query.message.edit_text("✅ Reaksiyalar saqlandi!", reply_markup=get_main_menu(uid))
+        await query.message.edit_text("✅ <b>Premium akkauntlar uchun reaksiyalar saqlandi!</b>", reply_markup=get_main_menu(uid))
+
+    # 2. Oddiy akkauntlar uchun reaksiya kiritish (faqat 1 ta standart)
+    elif data.startswith("set_norm_"):
+        cid = data.split("_")[2]
+        user_states[uid] = {"state": "waiting_norm_emoji", "cid": cid}
+        await query.answer()
+        await query.message.edit_text(
+            "👤 <b>Oddiy akkauntlar uchun:</b>\n\n"
+            "Klaviaturangizdan faqat <b>1 ta standart emoji</b> yuboring (Masalan: 🔥 yoki ❤️ yoki 👍):",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Bekor qilish", callback_data="cancel_setup")]])
+        )
 
     elif data.startswith("edit_first3_"):
         cid = data.split("_")[2]
         first_acc = u_data["accounts"][0]
         options = await fetch_channel_reactions(active_userbots[first_acc]["client"], int(cid))
-        u_data["channels"][cid]["emojis"] = options[:3]
+        u_data["channels"][cid]["premium_emojis"] = options[:3]
+        std_opts = [x for x in options if x.get("type") == "standard"]
+        u_data["channels"][cid]["normal_emojis"] = std_opts[:1] if std_opts else DEFAULT_STANDARD
         u_data["channels"][cid]["mode"] = "fixed"
         save_db(db)
-        await query.answer("Dastlabki 3 ta reaksiya saqlandi!")
-        await query.message.edit_text("✅ Kanal reaksiyalari biriktirildi!", reply_markup=get_main_menu(uid))
+        await query.answer("Kanal reaksiyalari biriktirildi!")
+        await query.message.edit_text("✅ Kanalning dastlabki reaksiyalari saqlandi!", reply_markup=get_main_menu(uid))
 
     elif data.startswith("edit_dyn_"):
         cid = data.split("_")[2]
         u_data["channels"][cid]["mode"] = "dynamic"
-        u_data["channels"][cid]["emojis"] = []
         save_db(db)
         await query.answer("Dinamik rejim yoqildi!")
-        await query.message.edit_text("✅ Dinamik rejim faol!", reply_markup=get_main_menu(uid))
+        await query.message.edit_text("✅ Dinamik rejim faollashtirildi!", reply_markup=get_main_menu(uid))
 
     elif data.startswith("del_"):
         cid = data.split("_")[1]
@@ -474,19 +504,6 @@ async def message_dispatcher(client, message):
     uid = message.from_user.id
     state_data = user_states.get(uid, {})
     state = state_data.get("state")
-
-    if state == "waiting_admin_message" and uid == ADMIN_ID:
-        target = state_data.get("target")
-        user_states.pop(uid, None)
-        if message.text == "/cancel":
-            await message.reply_text("Bekor qilindi.")
-            return
-        try:
-            await bot.send_message(target, f"📬 <b>Admin xabari:</b>\n\n{message.text}", parse_mode=ParseMode.HTML)
-            await message.reply_text("✅ Xabar yetkazildi!")
-        except Exception as e:
-            await message.reply_text(f"❌ Xatolik: {e}")
-        return
 
     if uid not in db["allowed_users"]:
         return
@@ -543,7 +560,8 @@ async def message_dispatcher(client, message):
         except Exception as e:
             await message.reply_text(f"❌ Parol xato: {e}")
 
-    elif state == "waiting_emojis":
+    # Premium emoji qabul qilish (1-3 ta)
+    elif state == "waiting_prem_emojis":
         emojis = state_data.get("emojis", [])
         if message.entities:
             for ent in message.entities:
@@ -554,7 +572,20 @@ async def message_dispatcher(client, message):
                 if ch.strip():
                     emojis.append({"type": "standard", "val": ch})
         user_states[uid]["emojis"] = emojis[:3]
-        await message.reply_text(f"Reaksiya olindi ({len(user_states[uid]['emojis'])}/3). Saqlash uchun 'Saqlash' tugmasini bosing.")
+        await message.reply_text(f"👑 Premium reaksiya qabul qilindi ({len(user_states[uid]['emojis'])}/3). Saqlash tugmasini bosing.")
+
+    # Oddiy emoji qabul qilish (faqat 1 ta standart)
+    elif state == "waiting_norm_emoji":
+        ch = message.text.strip() if message.text else ""
+        if ch:
+            cid = state_data.get("cid")
+            u_data["channels"][cid]["normal_emojis"] = [{"type": "standard", "val": ch[:1]}]
+            u_data["channels"][cid]["mode"] = "fixed"
+            save_db(db)
+            user_states.pop(uid, None)
+            await message.reply_text(f"✅ <b>Oddiy akkauntlar uchun ({ch[:1]}) reaksiyasi saqlandi!</b>", reply_markup=get_main_menu(uid))
+        else:
+            await message.reply_text("Iltimos, faqat bitta standart emoji yuboring.")
 
     elif state == "waiting_channel":
         accs = u_data.get("accounts", [])
@@ -572,7 +603,12 @@ async def message_dispatcher(client, message):
 
             cid = str(chat.id)
             if cid not in u_data["channels"]:
-                u_data["channels"][cid] = {"title": chat.title, "emojis": [], "mode": "dynamic"}
+                u_data["channels"][cid] = {
+                    "title": chat.title,
+                    "premium_emojis": DEFAULT_PREMIUM,
+                    "normal_emojis": DEFAULT_STANDARD,
+                    "mode": "fixed"
+                }
                 save_db(db)
             user_states.pop(uid, None)
             await message.reply_text(f"📢 Kanal: <b>{chat.title}</b> ulandi!", reply_markup=get_channel_action_markup(chat.id), parse_mode=ParseMode.HTML)
