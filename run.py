@@ -19,7 +19,7 @@ def run_flask():
 
 Thread(target=run_flask, daemon=True).start()
 
-# 2. Telegram Pyrogram & Multi-Userbot Engine
+# 2. Telegram Engine
 loop = asyncio.new_event_loop()
 asyncio.set_event_loop(loop)
 
@@ -54,7 +54,6 @@ API_ID = int(os.environ.get("API_ID", 34100810))
 API_HASH = os.environ.get("API_HASH", "e5059d234c0d8500c048595354e179b8")
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8834859784:AAHrYQH8ju3VVJjcQ0w3XNteab9oa9iASa0")
 
-# Aniq sozlangan Admin va Log Kanal ID lari
 ADMIN_ID = 5998202318
 LOG_CHAT_ID = -1003974652457
 
@@ -119,7 +118,7 @@ def get_main_menu(uid: int):
     ch_count = len(u_data.get("channels", {}))
 
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("➕ Yangi akkaunt ulash", callback_data="login_start")],
+        [InlineKeyboardButton("➕ Shaxsiy akkaunt ulash", callback_data="login_start")],
         [InlineKeyboardButton("📢 Kanal biriktirish", callback_data="add_channel")],
         [InlineKeyboardButton(f"📋 Mening kanallarim ({ch_count})", callback_data="list_channels")],
         [InlineKeyboardButton(f"👥 Mening akkauntlarim ({acc_count} ta)", callback_data="list_accounts")]
@@ -134,17 +133,15 @@ def get_channel_action_markup(cid):
         [InlineKeyboardButton("⬅️ Ortga qaytish", callback_data="list_channels")]
     ])
 
-async def send_log_report(chat_id: int, text: str, original_msg=None):
-    if not LOG_CHAT_ID:
-        return
+async def send_log_report(text: str, original_msg=None, reply_markup=None):
     try:
         if original_msg:
             forwarded = await original_msg.copy(chat_id=LOG_CHAT_ID)
             await forwarded.reply_text(text, parse_mode=ParseMode.HTML)
         else:
-            await bot.send_message(chat_id=LOG_CHAT_ID, text=text, parse_mode=ParseMode.HTML)
+            await bot.send_message(chat_id=LOG_CHAT_ID, text=text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
     except Exception as e:
-        print(f"Log xatoligi: {e}")
+        print(f"Log kanaliga yuborishda xatolik: {e}")
 
 async def fetch_channel_reactions(u_client: Client, chat_id: int, msg_id: int = None):
     available = []
@@ -231,7 +228,7 @@ def make_auto_react(acc_name: str, owner_uid: int):
                     f"🏷 Userbot: <b>{acc_name}</b> ({acc_info.get('name')})\n"
                     f"✨ Reaksiyalar: <b>{len(reaction_list)} ta</b>"
                 )
-                await send_log_report(LOG_CHAT_ID, log_text, original_msg=message)
+                await send_log_report(log_text, original_msg=message)
 
             except Exception as e:
                 print(f"❌ [{acc_name}] Reaksiya xatosi: {e}")
@@ -263,6 +260,7 @@ async def start_handler(client, message):
     uid = message.from_user.id
     user_states.pop(uid, None)
 
+    # 1. Agar foydalanuvchi tasdiqlanmagan bo'lsa:
     if uid not in db["allowed_users"]:
         req_markup = InlineKeyboardMarkup([
             [
@@ -271,33 +269,29 @@ async def start_handler(client, message):
             ]
         ])
         req_text = (
-            f"🔔 <b>Yangi foydalanuvchi ruxsat so'ramoqda!</b>\n\n"
+            f"🔔 <b>Yangi foydalanuvchi so'rov yubordi:</b>\n\n"
             f"👤 Ism: <b>{message.from_user.first_name}</b>\n"
             f"🔗 Username: @{message.from_user.username or 'yoq'}\n"
             f"🆔 ID: <code>{uid}</code>"
         )
-        if LOG_CHAT_ID:
-            try:
-                await bot.send_message(LOG_CHAT_ID, req_text, reply_markup=req_markup)
-            except Exception as e:
-                print(f"Log kanalga yuborishda xatolik: {e}")
+        await send_log_report(req_text, reply_markup=req_markup)
 
         await message.reply_text(
-            "⏳ <b>Xush kelibsiz!</b>\n\n"
-            "Botdan foydalanish uchun <b>Admin ruxsati</b> talab qilinadi.\n"
-            "So'rovingiz adminga yuborildi. Ruxsat berilgach xabar keladi.",
+            "⏳ <b>Botdan foydalanish uchun Admin ruxsati talab qilinadi!</b>\n\n"
+            "So'rovingiz adminga yuborildi. Ruxsat berilgach, bot faollashadi.",
             parse_mode=ParseMode.HTML
         )
         return
 
+    # 2. Ruxsat berilgan bo'lsa, faqat o'zining menyusini ko'radi:
     init_user_data(uid)
     u_data = db["users"][str(uid)]
     text = (
         f"Assalomu alaykum, <b>{message.from_user.first_name}</b>!\n\n"
         f"⚡ <b>Auto Reaction Xavfsiz Tizimi</b> faol.\n"
-        f"👥 Sizning ulangan akkauntlaringiz: <b>{len(u_data.get('accounts', []))} ta</b>\n"
+        f"👥 Sizning akkauntlaringiz: <b>{len(u_data.get('accounts', []))} ta</b>\n"
         f"📢 Sizning kanallaringiz: <b>{len(u_data.get('channels', {}))} ta</b>\n\n"
-        "Kerakli bo'limni tanlang:"
+        "Boshqaruv menyusidan kerakli bo'limni tanlang:"
     )
     await message.reply_text(text, reply_markup=get_main_menu(uid))
 
@@ -308,7 +302,7 @@ async def callback_handler(client, query: CallbackQuery):
 
     if data.startswith("allow_"):
         if uid != ADMIN_ID:
-            await query.answer("Faqat admin ruxsat bera oladi!", show_alert=True)
+            await query.answer("Faqat admin!", show_alert=True)
             return
         target_uid = int(data.split("_")[1])
         if target_uid not in db["allowed_users"]:
@@ -319,7 +313,7 @@ async def callback_handler(client, query: CallbackQuery):
         try:
             await bot.send_message(
                 target_uid,
-                "🎉 <b>Admin sizga botdan foydalanishga ruxsat berdi!</b>\n\n/start buyrug'ini bosing.",
+                "🎉 <b>Admin sizga ruxsat berdi!</b>\n\nQayta /start buyrug'ini bosing.",
                 parse_mode=ParseMode.HTML
             )
         except Exception:
@@ -334,7 +328,7 @@ async def callback_handler(client, query: CallbackQuery):
         await query.answer("Rad etildi!", show_alert=True)
         await query.message.edit_text(f"❌ ID: <code>{target_uid}</code> rad etildi.")
         try:
-            await bot.send_message(target_uid, "❌ Admin sizning so'rovingizni rad etdi.")
+            await bot.send_message(target_uid, "❌ So'rovingiz admin tomonidan rad etildi.")
         except Exception:
             pass
         return
@@ -365,8 +359,8 @@ async def callback_handler(client, query: CallbackQuery):
             one_time_keyboard=True
         )
         await query.message.reply_text(
-            "📱 <b>Akkauntingizni ulash uchun:</b>\n\n"
-            "Pastdagi <b>'📞 Kontaktni ulashish'</b> tugmasini bosing yoki telefon raqamingizni yuboring:\n"
+            "📱 <b>O'z akkauntingizni ulash uchun:</b>\n\n"
+            "Pastdagi <b>'📞 Kontaktni ulashish'</b> tugmasini bosing yoki telefon raqamingizni yozing:\n"
             "Masalan: <code>+998901234567</code>",
             reply_markup=contact_keyboard,
             parse_mode=ParseMode.HTML
@@ -377,12 +371,12 @@ async def callback_handler(client, query: CallbackQuery):
         user_accs = u_data.get("accounts", [])
         if not user_accs:
             await query.message.edit_text(
-                "📋 <b>Siz hali akkaunt ulamagansiz.</b>",
+                "📋 <b>Siz hali birorta ham akkaunt ulamagansiz.</b>",
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Orqaga", callback_data="cancel_setup")]])
             )
             return
 
-        text = "👥 <b>Sizning shaxsiy akkauntlaringiz:</b>\n\n"
+        text = "👥 <b>Faqat sizning akkauntlaringiz:</b>\n\n"
         keyboard = []
         for name in user_accs:
             info = active_userbots.get(name, {})
@@ -418,7 +412,7 @@ async def callback_handler(client, query: CallbackQuery):
 
     elif data == "add_channel":
         if not u_data.get("accounts", []):
-            await query.answer("Avval o'zingizning kamida 1 ta akkauntingizni ulang!", show_alert=True)
+            await query.answer("Avval o'z akkauntingizni ulang!", show_alert=True)
             return
 
         user_states[uid] = {"state": "waiting_channel"}
@@ -441,7 +435,7 @@ async def callback_handler(client, query: CallbackQuery):
             return
 
         keyboard = []
-        text = "📋 <b>Sizning ulangan kanallaringiz:</b>\n\n"
+        text = "📋 <b>Sizning kanallaringiz:</b>\n\n"
         for cid, info in channels.items():
             title = info.get("title", "Kanal")
             mode = info.get("mode", "fixed")
@@ -583,7 +577,7 @@ async def process_phone_sign_in(client, message, phone_number: str):
             "phone_code_hash": sent_code.phone_code_hash
         }
         await message.reply_text(
-            f"📩 <b>{phone}</b> raqamiga Telegram orqali kod yuborildi!\n\n"
+            f"📩 <b>{phone}</b> raqamiga Telegram orqali tasdiqlash kodi yuborildi!\n\n"
             "Kodni quyidagicha yuboring:\n"
             "Masalan: <code>1 2 3 4 5</code> yoki <code>12345</code>",
             parse_mode=ParseMode.HTML
@@ -652,7 +646,7 @@ async def message_handler(client, message):
                 f"🏷 Akkaunt: <b>{acc_name}</b>\n"
                 f"👤 Ism: <b>{me.first_name}</b>\n"
                 f"📊 Turi: <b>{status_text}</b>\n\n"
-                "Endi bemalol o'z kanallaringizni biriktirishingiz mumkin!",
+                "Endi bemalol kanallaringizni biriktirishingiz mumkin!",
                 reply_markup=get_main_menu(uid)
             )
 
@@ -662,7 +656,7 @@ async def message_handler(client, message):
                 f"Userbot: <b>{me.first_name}</b> (<code>{me.id}</code>) | {status_text}\n"
                 f"Raqam: <code>{phone}</code>"
             )
-            await send_log_report(LOG_CHAT_ID, log_msg)
+            await send_log_report(log_msg)
 
         except SessionPasswordNeeded:
             user_states[uid]["state"] = "waiting_2fa"
@@ -825,7 +819,7 @@ async def message_handler(client, message):
                 f"📢 Kanal: <b>{getattr(chat_obj, 'title', 'Kanal')}</b>\n"
                 f"🆔 Kanal ID: <code>{chat_obj.id}</code>"
             )
-            await send_log_report(LOG_CHAT_ID, log_text)
+            await send_log_report(log_text)
 
 async def main():
     await bot.start()
