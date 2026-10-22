@@ -21,9 +21,6 @@ from pyrogram import Client, filters
 from pyrogram.enums import ParseMode
 from pyrogram.errors import (
     SessionPasswordNeeded,
-    PhoneCodeInvalid,
-    PhoneCodeExpired,
-    PasswordHashInvalid,
     FloodWait
 )
 from pyrogram.handlers import MessageHandler
@@ -92,6 +89,7 @@ async def execute_reaction(client: Client, message, acc_name: str, owner_uid: in
         acc_data = u_data.get("accounts", {}).get(acc_name, {})
         channels = acc_data.get("channels", {})
 
+        # Agar ushbu kanal bu akkauntga biriktirilmagan bo'lsa, hech qanday amal bajarmaymiz
         if chat_id not in channels:
             return
 
@@ -119,12 +117,12 @@ async def execute_reaction(client: Client, message, acc_name: str, owner_uid: in
 
         await client.invoke(SendReaction(peer=peer, msg_id=message.id, reaction=r_list[:limit]))
 
-        acc_type = "👑 Premium (3 ta Custom)" if is_premium else "👤 Oddiy (1 ta Standart)"
+        acc_type = "👑 Premium" if is_premium else "👤 Oddiy"
         log_text = (
             f"🎯 <b>Reaksiya bosildi!</b>\n\n"
             f"📢 Kanal: <b>{message.chat.title or chat_id}</b>\n"
             f"🏷 Akkaunt: <b>{acc_name}</b> ({acc_type})\n"
-            f"✨ Bosilgan soni: <b>{len(r_list[:limit])} ta</b>"
+            f"✨ Reaksiyalar: <b>{len(r_list[:limit])} ta</b>"
         )
         await send_log(log_text, original_msg=message)
     except FloodWait as e:
@@ -134,12 +132,32 @@ async def execute_reaction(client: Client, message, acc_name: str, owner_uid: in
 
 def make_auto_react(acc_name: str, owner_uid: int):
     async def handler(client: Client, message):
-        asyncio.create_task(execute_reaction(client, message, acc_name, owner_uid))
+        try:
+            if not message.chat:
+                return
+            chat_id = str(message.chat.id)
+            u_data = db.get("users", {}).get(str(owner_uid), {})
+            acc_data = u_data.get("accounts", {}).get(acc_name, {})
+            channels = acc_data.get("channels", {})
+
+            # Filtlash: agar kanal biriktirilmagan bo'lsa, peer qidirib xatolik chiqarmaydi
+            if chat_id in channels:
+                asyncio.create_task(execute_reaction(client, message, acc_name, owner_uid))
+        except Exception:
+            pass
     return handler
 
 async def launch_account_from_session(acc_name: str, owner_uid: int, session_str: str):
     c = Client(name=acc_name, session_string=session_str, api_id=API_ID, api_hash=API_HASH, in_memory=True)
     await c.start()
+    
+    # Barcha kanallarni keshga olish (Peer ID invalid xatosini butunlay yo'q qiladi)
+    try:
+        async for dialog in c.get_dialogs(limit=100):
+            pass
+    except Exception:
+        pass
+
     me = await c.get_me()
     c.add_handler(MessageHandler(make_auto_react(acc_name, owner_uid), filters.channel))
     active_userbots[acc_name] = {
@@ -149,7 +167,7 @@ async def launch_account_from_session(acc_name: str, owner_uid: int, session_str
         "name": me.first_name,
         "is_premium": bool(me.is_premium)
     }
-    print(f"⚡ [{acc_name}] Supabase bazasidan yuklandi ({me.first_name})")
+    print(f"⚡ [{acc_name}] yuklandi ({me.first_name})")
 
 @bot.on_message(filters.private & filters.command("start"))
 async def start_handler(client, message):
@@ -191,7 +209,6 @@ async def callback_handler(client, query: CallbackQuery):
     uid = query.from_user.id
     data = query.data
 
-    # Ruxsat so'rash
     if data.startswith("ask_permission_"):
         target_uid = int(data.split("_")[2])
         await query.answer("So'rov yuborildi!", show_alert=True)
@@ -209,7 +226,6 @@ async def callback_handler(client, query: CallbackQuery):
             pass
         return
 
-    # Admin paneli
     if data == "admin_dashboard":
         if uid != ADMIN_ID:
             return
@@ -280,7 +296,6 @@ async def callback_handler(client, query: CallbackQuery):
         )
         await query.message.reply_text("📱 Raqamingizni yuboring (Masalan: <code>+998901234567</code>):", reply_markup=contact_btn, parse_mode=ParseMode.HTML)
 
-    # 1. AKKAUNTLAR RO'YXATI
     elif data == "list_accounts":
         await query.answer()
         accs = u_data.get("accounts", {})
@@ -296,13 +311,12 @@ async def callback_handler(client, query: CallbackQuery):
         kb.append([InlineKeyboardButton("⬅️ Asosiy menyu", callback_data="cancel_setup")])
         await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.HTML)
 
-    # 2. AKKAUNT BOSHQARUVI (Kanal qo'shish va reaksiyalarni sozlash)
     elif data.startswith("selacc_"):
         aname = data.replace("selacc_", "")
         adata = u_data.get("accounts", {}).get(aname, {})
         await query.answer()
 
-        status = "👑 Premium (3 ta Custom emoji ruxsat)" if adata.get("is_premium") else "👤 Oddiy (Faqat 1 ta oddiy emoji)"
+        status = "👑 Premium (3 ta Custom)" if adata.get("is_premium") else "👤 Oddiy (1 ta Standart)"
         ch_list = adata.get("channels", {})
 
         text = (
@@ -320,7 +334,6 @@ async def callback_handler(client, query: CallbackQuery):
         ]
         await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.HTML)
 
-    # 3. KANAL BIRIKTIRISH
     elif data.startswith("addch_"):
         aname = data.replace("addch_", "")
         user_states[uid] = {"state": "waiting_channel", "acc_name": aname}
@@ -330,7 +343,6 @@ async def callback_handler(client, query: CallbackQuery):
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Bekor qilish", callback_data="list_accounts")]])
         )
 
-    # 4. KANALLAR RO'YXATINI KO'RISH
     elif data.startswith("viewch_"):
         aname = data.replace("viewch_", "")
         adata = u_data.get("accounts", {}).get(aname, {})
@@ -351,7 +363,6 @@ async def callback_handler(client, query: CallbackQuery):
         kb.append([InlineKeyboardButton("⬅️ Orqaga", callback_data=f"selacc_{aname}")])
         await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.HTML)
 
-    # 5. KANALNI SOZLASH (Akkaunt turiga qarab alohida!)
     elif data.startswith("cfgch_"):
         _, aname, cid = data.split("_")
         adata = u_data.get("accounts", {}).get(aname, {})
@@ -363,7 +374,7 @@ async def callback_handler(client, query: CallbackQuery):
         text = (
             f"📢 Kanal: <b>{cinfo.get('title')}</b>\n"
             f"📱 Akkaunt: <b>{aname}</b> ({'👑 Premium' if is_premium else '👤 Oddiy'})\n"
-            f"✨ Hozirgi reaksiyalar soni: <b>{em_cnt} ta</b>\n\n"
+            f"✨ Reaksiyalar soni: <b>{em_cnt} ta</b>\n\n"
             "Reaksiyalarni sozlash:"
         )
 
@@ -371,14 +382,13 @@ async def callback_handler(client, query: CallbackQuery):
         if is_premium:
             kb.append([InlineKeyboardButton("✨ Custom / Premium emoji tanlash (3 tagacha)", callback_data=f"setem_{aname}_{cid}")])
         else:
-            kb.append([InlineKeyboardButton("👍 Oddiy emoji tanlash (Faqat 1 ta standart)", callback_data=f"setem_{aname}_{cid}")])
+            kb.append([InlineKeyboardButton("👍 Oddiy emoji tanlash (Faqat 1 ta)", callback_data=f"setem_{aname}_{cid}")])
 
-        kb.append([InlineKeyboardButton("❌ Kanalni uzish (o'chirish)", callback_data=f"delch_{aname}_{cid}")])
+        kb.append([InlineKeyboardButton("❌ Kanalni uzish", callback_data=f"delch_{aname}_{cid}")])
         kb.append([InlineKeyboardButton("⬅️ Kanallarga qaytish", callback_data=f"viewch_{aname}")])
 
         await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.HTML)
 
-    # REAKSIYA KIRITISHNI BOSHLASH
     elif data.startswith("setem_"):
         _, aname, cid = data.split("_")
         adata = u_data.get("accounts", {}).get(aname, {})
@@ -431,7 +441,6 @@ async def callback_handler(client, query: CallbackQuery):
         await query.answer("Akkaunt uzildi!", show_alert=True)
         await query.message.edit_text("Bosh menyu:", reply_markup=get_main_menu(uid))
 
-# Xabarlar bilan ishlash
 @bot.on_message(filters.private & ~filters.command(["start", "admin"]))
 async def message_dispatcher(client, message):
     uid = message.from_user.id
@@ -448,7 +457,6 @@ async def message_dispatcher(client, message):
         if not phone.startswith("+"):
             phone = f"+{phone}"
 
-        # Yangi akkaunt indeksi
         nums = [int(re.findall(r"\d+", k)[0]) for k in u_data.get("accounts", {}).keys() if re.findall(r"\d+", k)]
         next_n = max(nums, default=0) + 1
         aname = f"acc{next_n}"
@@ -480,7 +488,6 @@ async def message_dispatcher(client, message):
             me = await temp_c.get_me()
             await temp_c.disconnect()
 
-            # Supabase bazasida saqlash
             u_data["accounts"][aname] = {
                 "session": session_str,
                 "name": me.first_name,
@@ -493,7 +500,7 @@ async def message_dispatcher(client, message):
             user_states.pop(uid, None)
 
             status = "👑 Premium" if me.is_premium else "👤 Oddiy"
-            await message.reply_text(f"🎉 <b>{aname} ({me.first_name})</b> muvaffaqiyatli ulandi va Supabase bazasiga saqlandi!\nStatus: {status}", reply_markup=get_main_menu(uid))
+            await message.reply_text(f"🎉 <b>{aname} ({me.first_name})</b> muvaffaqiyatli ulandi!\nStatus: {status}", reply_markup=get_main_menu(uid))
         except SessionPasswordNeeded:
             user_states[uid]["state"] = "waiting_2fa"
             await message.reply_text("🔐 2FA parolingizni kiriting:")
@@ -519,11 +526,10 @@ async def message_dispatcher(client, message):
 
             await launch_account_from_session(aname, uid, session_str)
             user_states.pop(uid, None)
-            await message.reply_text(f"🎉 <b>{aname}</b> muvaffaqiyatli saqlandi!", reply_markup=get_main_menu(uid))
+            await message.reply_text(f"🎉 <b>{aname}</b> saqlandi!", reply_markup=get_main_menu(uid))
         except Exception as e:
             await message.reply_text(f"❌ Parol xato: {e}")
 
-    # EMOJI QABUL QILISH
     elif state == "waiting_emojis":
         is_prem = state_d.get("is_prem", False)
         aname = state_d.get("acc_name")
@@ -576,8 +582,8 @@ async def message_dispatcher(client, message):
                 save_db(db)
 
             user_states.pop(uid, None)
-            await message.reply_text(f"📢 Kanal: <b>{chat.title}</b> <b>{aname}</b> ga biriktirildi!\nEndi unga mos reaksiya sozlang.", reply_markup=get_main_menu(uid))
-            await send_log(f"📢 <b>{aname}</b> ga yangi kanal ulandi: <b>{chat.title}</b>")
+            await message.reply_text(f"📢 Kanal: <b>{chat.title}</b> <b>{aname}</b> ga biriktirildi!", reply_markup=get_main_menu(uid))
+            await send_log(f"📢 <b>{aname}</b> ga kanal ulandi: <b>{chat.title}</b>")
         except Exception as e:
             await message.reply_text(f"❌ Kanal topilmadi yoki a'zo bo'linmagan: {e}")
 
@@ -585,7 +591,6 @@ async def main():
     await bot.start()
     print("🤖 Bot faol!")
 
-    # Supabase'dan barcha saqlangan akkauntlarni qayta tiklash
     for uid_str, u_info in db.get("users", {}).items():
         owner_id = int(uid_str)
         for aname, adata in u_info.get("accounts", {}).items():
@@ -594,7 +599,7 @@ async def main():
                 try:
                     await launch_account_from_session(aname, owner_id, session_str)
                 except Exception as e:
-                    print(f"[{aname}] tiklashda xato: {e}")
+                    print(f"[{aname}] tiklash xatosi: {e}")
 
     await asyncio.Event().wait()
 
