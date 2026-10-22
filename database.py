@@ -1,26 +1,33 @@
 import json
-import os
-import glob
-import re
-from config import DATA_FILE, SESSIONS_DIR, ADMIN_ID
+from supabase import create_client, Client
+from config import SUPABASE_URL, SUPABASE_KEY, ADMIN_ID
+
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+DEFAULT_DATA = {
+    "allowed_users": [ADMIN_ID],
+    "users": {}  # "uid": {"first_name": "", "username": "", "accounts": {"acc1": {"session": "...", "name": "", "is_premium": False, "channels": {}}}}
+}
 
 def load_db():
-    if os.path.exists(DATA_FILE):
-        try:
-            with open(DATA_FILE, "r") as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return {
-        "allowed_users": [ADMIN_ID],
-        "users": {}
-    }
-
-def save_db(data):
-    with open(DATA_FILE, "w") as f:
-        json.dump(data, f, indent=4)
+    try:
+        res = supabase.table("bot_storage").select("data").eq("key", "main_state").execute()
+        if res.data:
+            return res.data[0]["data"]
+        else:
+            supabase.table("bot_storage").insert({"key": "main_state", "data": DEFAULT_DATA}).execute()
+            return DEFAULT_DATA
+    except Exception as e:
+        print(f"Supabase yuklash xatosi: {e}")
+        return DEFAULT_DATA
 
 db = load_db()
+
+def save_db(data):
+    try:
+        supabase.table("bot_storage").upsert({"key": "main_state", "data": data}).execute()
+    except Exception as e:
+        print(f"Supabase saqlash xatosi: {e}")
 
 def init_user(uid: int, first_name="Foydalanuvchi", username=""):
     uid_str = str(uid)
@@ -28,22 +35,10 @@ def init_user(uid: int, first_name="Foydalanuvchi", username=""):
         db["users"][uid_str] = {
             "first_name": first_name,
             "username": username or "",
-            "accounts": [],
-            "channels": {}
+            "accounts": {}
         }
     else:
         db["users"][uid_str]["first_name"] = first_name
         if username:
             db["users"][uid_str]["username"] = username
     save_db(db)
-
-def get_next_acc_name():
-    existing = glob.glob(os.path.join(SESSIONS_DIR, "acc*.session"))
-    nums = []
-    for p in existing:
-        fname = os.path.basename(p)
-        m = re.match(r"acc(\d+)\.session", fname)
-        if m:
-            nums.append(int(m.group(1)))
-    next_num = max(nums, default=0) + 1
-    return f"acc{next_num}"
